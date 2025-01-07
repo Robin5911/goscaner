@@ -3,7 +3,9 @@ package scanner
 
 type Target struct {
 	Ip string
-	Port string
+	PortMin int
+	PortMax int
+	Protocol string
 	TimeoutSecond int
-	ColorRead bool
+	ColorLog bool
 }

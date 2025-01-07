@@ -1,4 +1,4 @@
-module github.com/Robin5911/goscanner
+module goscanner
 
 go 1.21.12
 

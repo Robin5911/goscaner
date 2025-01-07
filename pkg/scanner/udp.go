@@ -2,13 +2,15 @@ package scanner
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"golang.org/x/net/icmp"
 	"golang.org/x/net/ipv4"
 	"net"
-	"strconv"
+	"sync"
 	"time"
 )
+
 func ListenICMPUnreachable(timeoutSecond int) ([]byte, error) {
 	//监听ipv4的icmp报文
 	c, _ := icmp.ListenPacket("ip4:icmp", "0.0.0.0")
@@ -16,10 +18,14 @@ func ListenICMPUnreachable(timeoutSecond int) ([]byte, error) {
 	//设置超时时间
 	_ = c.SetReadDeadline(time.Now().Add(time.Second * time.Duration(timeoutSecond)))
 	//读取会话中信息
-	n, _, _ := c.ReadFrom(buf)
+	n, _, err := c.ReadFrom(buf)
+	if err != nil {
+		return nil, errors.New(fmt.Sprintf("ERRO - happen unknown err : %s",err.Error()))
+	}
 	//解析报文内容
 	msg, err := icmp.ParseMessage(ipv4.ICMPTypeDestinationUnreachable.Protocol(), buf[:n])
 	if err != nil {
+		fmt.Printf(err.Error())
 		return nil, err
 	}
 	//如果报文类型为icmp不可达类型的报文则返回报文内容
@@ -54,39 +60,47 @@ func ParseUnreachUDP(unreachData []byte) Target {
 	udpHeader = append(udpHeader, dataBytes[:8]...)
 	//srcPort := strconv.Itoa(int(binary.BigEndian.Uint16(udpHeader[:2])))
 	//目的端口的位置，实测得到
-	dstPort := strconv.Itoa(int(binary.BigEndian.Uint16(udpHeader[2:4])))
+	dstPort := int(binary.BigEndian.Uint16(udpHeader[2:4]))
 
 	// 打印 UDP 数据包
 	//fmt.Printf("UDP header:\n")
 	//fmt.Printf("SrcPort: %s\n", srcPort)
 	//fmt.Printf("DstPort: %s\n", dstPort)
-	result.Port = dstPort
+	result.PortMin = dstPort
+	result.PortMax = dstPort
 	return result
 }
-func (t *Target) UDP() {
-	var msg string
-	addrAndPort := fmt.Sprintf("%s:%s", t.Ip, t.Port)
-	conn, _ := net.Dial("udp", addrAndPort)
-
-	// 发送数据
-	data := []byte("Check Udp Port!")
-	_, err := conn.Write(data)
-	if err !=nil {
-		msg = fmt.Sprintf("ERRO - Write data into udp conn %s:%s , err : %s\n",t.Ip,t.Port,err.Error())
-		fmt.Println(msg)
-		return
+func (t *Target) UDP() []int {
+	var openPorts []int
+	var wg sync.WaitGroup
+	for p:= t.PortMin;p<=t.PortMax;p++ {
+		wg.Add(1)
+		port := p
+		go func(p int) {
+			defer wg.Done()
+			//var msg string
+			addrAndPort := fmt.Sprintf("%s:%d", t.Ip, p)
+			conn, _ := net.Dial("udp", addrAndPort)
+			// 发送数据
+			data := []byte("HelloCheck")
+			_, err := conn.Write(data)
+			if err !=nil {
+				//msg = fmt.Sprintf("ERRO - Write data into udp conn %s:%d , err : %s\n",t.Ip,p,err.Error())
+				//fmt.Println(msg)
+				return
+			}
+			// 开启监听ICMP不可达包
+			unreach, err := ListenICMPUnreachable(t.TimeoutSecond)
+			if err != nil {
+				return
+			}
+			res := ParseUnreachUDP(unreach)
+			if res.Ip == t.Ip && res.PortMin == port {
+				openPorts= append(openPorts, port)
+			}
+		}(port)
 	}
-	// 开启监听ICMP不可达包
-	unreach, err := ListenICMPUnreachable(5)
-	if err == nil {
-		res := ParseUnreachUDP(unreach)
-		if res.Ip == t.Ip && res.Port == t.Port {
-			fmt.Printf("解析出来的icmp不可达包和参数传入的ip以及port均匹配%v", *t)
-			return
-		} else {
-			fmt.Printf("虽收到icmp不可达包[%v:%v]，但和当前探测的IP和端口[%v:%v]不匹配判定UDP端口为打开状态", res.Ip, res.Port, t.Ip, t.Port)
-			return
-		}
-	}
+	wg.Wait()
 
+	return openPorts
 }
