@@ -22,7 +22,6 @@ func (t *Target) TCP() []int{
 			}
 			//  关闭连接
 			conn.Close()
-			// 将结果发送到管道
 			openPorts= append(openPorts, p)
 		}(port)
 	}
